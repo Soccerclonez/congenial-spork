@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Genre Survival Diagnostic</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {margin:0; background:#000; color:#fff; font-family:Arial, sans-serif; overflow:hidden;}
+canvas {display:block; margin:auto; background:#111;}
+button {
+  background:#333; color:#fff; border:2px solid #666;
+  padding:10px 18px; margin:8px; cursor:pointer;
+}
+button:hover {background:#555;}
+#ui, #questionBox, #resultBox {
+  position:absolute; top:0; left:0; width:100%; height:100%;
+  display:flex; justify-content:center; align-items:center; flex-direction:column;
+}
+#questionBox, #resultBox {background:rgba(0,0,0,0.85); display:none;}
+#questNum {position:absolute; top:10px; right:10px; font-size:14px; color:#fff;}
+#powerups {position:absolute; top:10px; left:10px; text-align:left; font-size:14px;}
+</style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="600"></canvas>
+
+<!-- Power-up indicators -->
+<div id="powerups"></div>
+
+<!-- Intro -->
+<div id="ui">
+  <h1>🎮 Genre Survival Diagnostic</h1>
+  <p>Move and shoot to gain points. Answer 15 questions to discover your genre—then keep playing for a high score!</p>
+  <button onclick="startGame()">Start</button>
+</div>
+
+<!-- Question Overlay -->
+<div id="questionBox">
+  <div id="questNum"></div>
+  <h2 id="qText"></h2>
+  <div id="answers"></div>
+</div>
+
+<!-- Result Screen -->
+<div id="resultBox">
+  <h2>Your Preferred Genre Is:</h2>
+  <h1 id="finalGenre"></h1>
+  <div id="breakdown"></div>
+  <p id="explanation"></p>
+  <button onclick="location.reload()">Restart</button>
+</div>
+
+<script>
+/* ==========================================================
+   GENRE SURVIVAL DIAGNOSTIC - Power-Ups Added
+   ========================================================== */
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+let W=canvas.width,H=canvas.height;
+
+let player={x:W/2,y:H/2,r:9,speed:3};
+let enemies=[], bullets=[], powerups=[];
+let keys={}, score=0, health=100;
+let started=false, paused=false, gameOver=false;
+let nextQuestionScore=50;
+let questionsComplete=false;
+
+// Ammo
+let magSize=20;
+let currentAmmo=magSize;
+let isReloading=false;
+let reloadTime=60;
+let reloadProgress=0;
+
+// Power-ups
+let dualShotActive = false;
+let dualShotTimer = 0;
+let dualShotDuration = 600; // 10 seconds at 60fps
+let lastHealthSpawn = 0;
+let lastDualSpawn = 0;
+let healthSpawnInterval = 1800; // 30s
+let dualSpawnInterval = 2700;    // 45s
+
+let genreScore={
+  Horror:0,
+  Fantasy:0,
+  Puzzle:0,
+  "Sci-Fi":0,
+  Romance:0,
+  "Historical Fiction":0,
+  Dystopian:0
+};
+
+document.addEventListener("keydown",e=>{
+  keys[e.key]=true;
+  if(e.key===" "&& !paused && !isReloading && currentAmmo>0) shoot();
+});
+document.addEventListener("keyup",e=>keys[e.key]=false);
+canvas.addEventListener("click",()=>{
+  if(!paused && !isReloading && currentAmmo>0) shoot();
+});
+
+const questionPool=[
+  {q:"Do you prefer eerie tension or imaginative wonder?",
+   a:[{t:"Eerie tension",add:{Horror:4}}, {t:"Imaginative wonder",add:{Fantasy:4}}]},
+  {q:"Would you rather solve intricate puzzles or explore futuristic worlds?",
+   a:[{t:"Solve intricate puzzles",add:{Puzzle:4}}, {t:"Explore futuristic worlds",add:{"Sci-Fi":4}}]},
+  {q:"Are you drawn to emotional relationships or historical adventures?",
+   a:[{t:"Emotional relationships",add:{Romance:4}}, {t:"Historical adventures",add:{"Historical Fiction":4}}]},
+  {q:"Do you enjoy dystopian survival or magical fantasy?",
+   a:[{t:"Dystopian survival",add:{Dystopian:4}}, {t:"Magical fantasy",add:{Fantasy:4}}]},
+  {q:"Would you rather uncover ancient secrets or navigate futuristic tech?",
+   a:[{t:"Uncover ancient secrets",add:{"Historical Fiction":4}}, {t:"Navigate futuristic tech",add:{"Sci-Fi":4}}]},
+  {q:"Do you prefer stories about love or stories about societal collapse?",
+   a:[{t:"Stories about love",add:{Romance:4}}, {t:"Stories about societal collapse",add:{Dystopian:4}}]},
+  {q:"Are you more interested in logic-driven challenges or emotional journeys?",
+   a:[{t:"Logic-driven challenges",add:{Puzzle:4}}, {t:"Emotional journeys",add:{Romance:4}}]},
+  {q:"Do you like exploring haunted places or advanced alien civilizations?",
+   a:[{t:"Haunted places",add:{Horror:4}}, {t:"Alien civilizations",add:{"Sci-Fi":4}}]},
+  {q:"Would you rather unravel a royal mystery or survive a post-apocalyptic world?",
+   a:[{t:"Royal mystery",add:{"Historical Fiction":4}}, {t:"Post-apocalyptic survival",add:{Dystopian:4}}]},
+  {q:"Do you enjoy crafting spells or hacking futuristic systems?",
+   a:[{t:"Crafting spells",add:{Fantasy:4}}, {t:"Hacking futuristic systems",add:{"Sci-Fi":4}}]},
+  {q:"Are you captivated by tragic love or chilling suspense?",
+   a:[{t:"Tragic love",add:{Romance:4}}, {t:"Chilling suspense",add:{Horror:4}}]},
+  {q:"Would you rather decode ancient scrolls or rebuild society after collapse?",
+   a:[{t:"Decode ancient scrolls",add:{"Historical Fiction":4}}, {t:"Rebuild society",add:{Dystopian:4}}]},
+  {q:"Do you prefer enchanted forests or neon-lit megacities?",
+   a:[{t:"Enchanted forests",add:{Fantasy:4}}, {t:"Neon-lit megacities",add:{"Sci-Fi":4}}]},
+  {q:"Are you moved by heartfelt romance or intellectual puzzles?",
+   a:[{t:"Heartfelt romance",add:{Romance:4}}, {t:"Intellectual puzzles",add:{Puzzle:4}}]},
+  {q:"Do you find historical drama or dystopian rebellion more compelling?",
+   a:[{t:"Historical drama",add:{"Historical Fiction":4}}, {t:"Dystopian rebellion",add:{Dystopian:4}}]}
+];
+let questions=[]; 
+let totalQuestions=15;
+let qIndex=0;
+
+const ui=document.getElementById("ui"),
+      questionBox=document.getElementById("questionBox"),
+      qText=document.getElementById("qText"),
+      answers=document.getElementById("answers"),
+      questNum=document.getElementById("questNum"),
+      powerupsUI=document.getElementById("powerups");
+
+function startGame(){
+  ui.style.display="none";
+  started=true; paused=false; gameOver=false;
+  health=100; score=0; nextQuestionScore=50;
+  qIndex=0; enemies=[]; bullets=[]; powerups=[];
+  questionsComplete=false;
+  currentAmmo=magSize;
+  isReloading=false;
+  reloadProgress=0;
+  dualShotActive=false;
+  dualShotTimer=0;
+  lastHealthSpawn=0;
+  lastDualSpawn=0;
+  genreScore={
+    Horror:0,
+    Fantasy:0,
+    Puzzle:0,
+    "Sci-Fi":0,
+    Romance:0,
+    "Historical Fiction":0,
+    Dystopian:0
+  };
+  const shuffled = [...questionPool].sort(() => 0.5 - Math.random());
+  questions = shuffled.slice(0, totalQuestions);
+  spawnEnemies();
+  requestAnimationFrame(loop);
+}
+
+let frameCount = 0;
+function loop(){
+  if(!started||gameOver)return;
+  if(!paused){
+    update();
+    draw();
+    updatePowerupUI();
+  }
+  frameCount++;
+  requestAnimationFrame(loop);
+}
+
+function spawnEnemyAtEdge(){
+  const buffer = 20;
+  let x, y;
+  const side = Math.floor(Math.random()*4);
+  if(side === 0){ x = Math.random()*W; y = -buffer; }
+  else if(side === 1){ x = W + buffer; y = Math.random()*H; }
+  else if(side === 2){ x = Math.random()*W; y = H + buffer; }
+  else { x = -buffer; y = Math.random()*H; }
+  return {x,y};
+}
+
+function getSpawnRate(){
+  const base = 0.011 * (1/3);
+  if(!questionsComplete){
+    return base * 0.5;
+  } else {
+    return base * 0.75;
+  }
+}
+
+function update(){
+  // Power-up spawn timers
+  if(frameCount - lastHealthSpawn >= healthSpawnInterval){
+    powerups.push({x:Math.random()*(W-40)+20, y:Math.random()*(H-40)+20, type:"health", size:12});
+    lastHealthSpawn = frameCount;
+  }
+  if(frameCount - lastDualSpawn >= dualSpawnInterval){
+    powerups.push({x:Math.random()*(W-40)+20, y:Math.random()*(H-40)+20, type:"dual", size:12});
+    lastDualSpawn = frameCount;
+  }
+
+  // Dual shot countdown
+  if(dualShotActive){
+    dualShotTimer--;
+    if(dualShotTimer <= 0){
+      dualShotActive = false;
+    }
+  }
+
+  // Ammo & reload
+  if(currentAmmo <= 0 && !isReloading){
+    isReloading = true;
+    reloadProgress = 0;
+  }
+  if(isReloading){
+    reloadProgress++;
+    if(reloadProgress >= reloadTime){
+      currentAmmo = magSize;
+      isReloading = false;
+    }
+  }
+
+  // Movement
+  let dx=0, dy=0;
+  if(keys["w"]||keys["ArrowUp"]) dy=-1;
+  if(keys["s"]||keys["ArrowDown"]) dy=1;
+  if(keys["a"]||keys["ArrowLeft"]) dx=-1;
+  if(keys["d"]||keys["ArrowRight"]) dx=1;
+  const len=Math.hypot(dx,dy)||1;
+  player.x+=player.speed*(dx/len);
+  player.y+=player.speed*(dy/len);
+  player.x=Math.max(player.r,Math.min(W-player.r,player.x));
+  player.y=Math.max(player.r,Math.min(H-player.r,player.y));
+
+  // Power-up pickup
+  for(let i=powerups.length-1; i>=0; i--){
+    let p = powerups[i];
+    let dist = Math.hypot(player.x - p.x, player.y - p.y);
+    if(dist < player.r + p.size/2){
+      if(p.type === "health"){
+        health = Math.min(100, health + 25);
+      } else if(p.type === "dual"){
+        dualShotActive = true;
+        dualShotTimer = dualShotDuration;
+      }
+      powerups.splice(i,1);
+    }
+  }
+
+  // Bullets
+  bullets.forEach(b=>{ b.x+=b.vx; b.y+=b.vy; if(b.x<0||b.x>W||b.y<0||b.y>H) b.dead=true; });
+
+  // Enemies
+  enemies.forEach(e=>{
+    const speed = (1 + score/5000) * 0.85;
+    const dx=player.x-e.x, dy=player.y-e.y, d=Math.hypot(dx,dy);
+    e.x+=speed*(dx/d);
+    e.y+=speed*(dy/d);
+    if(d < player.r + e.r){
+      const damage = e.isBlue ? 10 : 5;
+      health -= damage;
+      if(health <= 0) endGame();
+    }
+  });
+
+  // Bullet-enemy collision
+  for(let b of bullets){
+    for(let e of enemies){
+      let dist=Math.hypot(b.x-e.x,b.y-e.y);
+      if(dist<e.r+2){
+        b.dead=true;
+        e.health--;
+        if(e.health <= 0){
+          e.dead=true;
+          score += e.isBlue ? 50 : 10;
+        }
+      }
+    }
+  }
+  bullets=bullets.filter(b=>!b.dead);
+  enemies=enemies.filter(e=>!e.dead);
+
+  // Spawn enemies
+  const spawnRate = getSpawnRate() + score/10500;
+  if(Math.random() < spawnRate){
+    const pos = spawnEnemyAtEdge();
+    const isBlue = Math.random() < 0.05;
+    const health = isBlue ? 2 : 1;
+    enemies.push({
+      x:pos.x,
+      y:pos.y,
+      r:6,
+      isBlue:isBlue,
+      health:health
+    });
+  }
+
+  if(!questionsComplete && score>=nextQuestionScore && qIndex<totalQuestions){
+    askQuestion();
+    nextQuestionScore+=100;
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle="#111"; ctx.fillRect(0,0,W,H);
+
+  // Power-ups
+  for(let p of powerups){
+    ctx.fillStyle = p.type === "health" ? "limegreen" : "yellow";
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+
+  // Bullets
+  ctx.fillStyle="yellow";
+  bullets.forEach(b=>{ctx.beginPath();ctx.arc(b.x,b.y,2,0,Math.PI*2);ctx.fill();});
+
+  // Enemies
+  enemies.forEach(e=>{
+    ctx.fillStyle = e.isBlue ? "cyan" : "red";
+    ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,Math.PI*2);ctx.fill();
+  });
+
+  // Player
+  ctx.fillStyle="white";
+  ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);ctx.fill();
+
+  // Reload bar
+  if(isReloading){
+    const barWidth = 40;
+    const barHeight = 4;
+    const progress = reloadProgress / reloadTime;
+    ctx.fillStyle = "#333";
+    ctx.fillRect(player.x - barWidth/2, player.y - player.r - 10, barWidth, barHeight);
+    ctx.fillStyle = "cyan";
+    ctx.fillRect(player.x - barWidth/2, player.y - player.r - 10, barWidth * progress, barHeight);
+  }
+
+  // HUD
+  ctx.fillStyle="lime"; ctx.font="14px Arial";
+  ctx.fillText("Score: "+Math.floor(score),10,20);
+  ctx.fillText("Health: "+Math.floor(health),10,40);
+  ctx.fillText("Ammo: "+currentAmmo+"/"+magSize,10,60);
+  if(!questionsComplete){
+    ctx.fillText("Answer questions to discover your genre!",10,H-40);
+  } else {
+    ctx.fillText("All questions done! Go for a high score!",10,H-40);
+  }
+  ctx.fillText("Move (WASD / Arrows) | Shoot (Space / Click)",10,H-20);
+}
+
+function getClosestEnemy(){
+  if(enemies.length === 0) return null;
+  let closest = null;
+  let minDist = Infinity;
+  for(let e of enemies){
+    const d = Math.hypot(e.x - player.x, e.y - player.y);
+    if(d < minDist){
+      minDist = d;
+      closest = e;
+    }
+  }
+  return closest;
+}
+
+function getRandomNearbyEnemy(maxDist=200){
+  const nearby = enemies.filter(e=>{
+    const d = Math.hypot(e.x - player.x, e.y - player.y);
+    return d <= maxDist;
+  });
+  if(nearby.length === 0) return null;
+  return nearby[Math.floor(Math.random()*nearby.length)];
+}
+
+function shoot(){
+  if(isReloading || currentAmmo <= 0) return;
+  currentAmmo--;
+
+  const primaryTarget = getClosestEnemy();
+  let angle1 = 0;
+  if(primaryTarget){
+    angle1 = Math.atan2(primaryTarget.y - player.y, primaryTarget.x - player.x);
+  }
+  bullets.push({x:player.x,y:player.y,vx:Math.cos(angle1)*6,vy:Math.sin(angle1)*6});
+
+  // Dual shot
+  if(dualShotActive){
+    currentAmmo--; // consume second bullet
+    if(currentAmmo < 0) currentAmmo = 0;
+    const secondaryTarget = getRandomNearbyEnemy(200);
+    let angle2 = angle1;
+    if(secondaryTarget){
+      angle2 = Math.atan2(secondaryTarget.y - player.y, secondaryTarget.x - player.x);
+    } else {
+      // slight spread if no nearby target
+      angle2 = angle1 + (Math.random() - 0.5) * 0.5;
+    }
+    bullets.push({x:player.x,y:player.y,vx:Math.cos(angle2)*6,vy:Math.sin(angle2)*6});
+  }
+}
+
+function spawnEnemies(){
+  for(let i=0;i<4;i++){
+    const pos = spawnEnemyAtEdge();
+    const isBlue = Math.random() < 0.05;
+    enemies.push({
+      x:pos.x,
+      y:pos.y,
+      r:6,
+      isBlue:isBlue,
+      health: isBlue ? 2 : 1
+    });
+  }
+}
+
+function pushEnemiesAway(){
+  const pushDistance = 150;
+  enemies.forEach(e=>{
+    const dx = e.x - player.x;
+    const dy = e.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if(dist > 0){
+      const nx = dx/dist;
+      const ny = dy/dist;
+      e.x = player.x + nx * (dist + pushDistance);
+      e.y = player.y + ny * (dist + pushDistance);
+    }
+  });
+}
+
+function askQuestion(){
+  paused=true;
+  pushEnemiesAway();
+  questionBox.style.display="flex";
+  if(qIndex>=questions.length){
+    qText.textContent="All 15 questions completed!";
+    questNum.textContent="";
+    answers.innerHTML="";
+    const btn=document.createElement("button");
+    btn.textContent="Continue Playing for High Score!";
+    btn.onclick=()=>{
+      questionsComplete=true;
+      questionBox.style.display="none";
+      paused=false;
+    };
+    answers.appendChild(btn);
+    return;
+  }
+  questNum.textContent=`Question ${qIndex+1} of ${totalQuestions}`;
+  const q=questions[qIndex];
+  qText.textContent=q.q;
+  answers.innerHTML="";
+  q.a.forEach(opt=>{
+    const b=document.createElement("button");
+    b.textContent=opt.t;
+    b.onclick=()=>{
+      for(let g in opt.add){genreScore[g]+=opt.add[g];}
+      qIndex++;
+      questionBox.style.display="none";
+      paused=false;
+    };
+    answers.appendChild(b);
+  });
+}
+
+function updatePowerupUI(){
+  let text = "";
+  if(dualShotActive){
+    const secs = Math.ceil(dualShotTimer / 60);
+    text += `DUAL SHOT: ${secs}s\n`;
+  }
+  powerupsUI.textContent = text;
+}
+
+function showResults(){
+  questionBox.style.display="none";
+  started=false; paused=true; gameOver=true;
+  const res=document.getElementById("resultBox");
+  res.style.display="flex";
+  const total=Object.values(genreScore).reduce((a,b)=>a+b,0)||1;
+  const sorted=Object.entries(genreScore).sort((a,b)=>b[1]-a[1]);
+  const top=sorted[0][0];
+  document.getElementById("finalGenre").textContent=top;
+  const breakdown=document.getElementById("breakdown");
+  breakdown.innerHTML="";
+  sorted.forEach(([g,v])=>{
+    breakdown.innerHTML+=`<div>${g}: ${(v/total*100).toFixed(1)}%</div>`;
+  });
+  const explain={
+    Horror:"You're drawn to suspense, fear, and psychological tension—Horror is your match.",
+    Fantasy:"You love magic, wonder, and mythical realms—Fantasy fits your imagination.",
+    Puzzle:"You thrive on logic, patterns, and problem-solving—Puzzle games suit your mind.",
+    "Sci-Fi":"You’re fascinated by technology, space, and future possibilities—Sci-Fi calls to you.",
+    Romance:"You value emotional depth, connection, and heartfelt stories—Romance resonates with you.",
+    "Historical Fiction":"You enjoy rich settings, real-world drama, and past eras—Historical Fiction fits your taste.",
+    Dystopian:"You’re intrigued by societal collapse, rebellion, and moral complexity—Dystopian themes speak to you."
+  };
+  document.getElementById("explanation").textContent=explain[top];
+}
+
+function endGame(){
+  started=false; paused=true;
+  showResults();
+}
+</script>
+</body>
+</html>
